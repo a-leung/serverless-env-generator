@@ -1,34 +1,23 @@
 'use strict'
 
+const dotenv = require('./dotenv')
 const kms = require('./kms')
-const path = require('path')
 const yaml = require('./yaml')
 
-const ENCRYPT_PREFIX = 'encrypted:'
-
-// Reads & pre-processes env-vars for the specified stage from a YAML-document
-const collectEnvVars = (doc, stage) => {
-  var envVars = []
-  if (doc && stage in doc) {
-    Object.keys(doc[stage]).forEach(attribute => {
-      var value = doc[stage][attribute]
-      let encrypted = (typeof value === 'string' && value.indexOf(ENCRYPT_PREFIX) === 0)
-      if (encrypted) value = value.substr(ENCRYPT_PREFIX.length)
-      envVars.push({ attribute, value, encrypted })
-    })
+// Reads multiple environment files
+const readEnvFiles = (yamlPaths, localDotEnvPath, stage) => {
+  var promises = yamlPaths.map(path =>
+    yaml.readEnv(path, stage).then(vars => (
+      { path, vars }
+    ))
+  )
+  if (localDotEnvPath) {
+    let promise = dotenv.read(localDotEnvPath)
+      .catch(error => (error.code === 'ENONET') ? {} : error)
+      .then(vars => ({ vars, path: localDotEnvPath }))
+    promises.push(promise)
   }
-  return envVars
-}
-
-// Reads environment files and returns the env-vars for the specified stage
-const readEnvYamlFiles = (filePaths, stage) => {
-  return Promise.all(filePaths.map(filePath => {
-    return yaml.read(filePath).then(doc => {
-      let file = path.basename(filePath)
-      let vars = collectEnvVars(doc, stage)
-      return { file, filePath, doc, vars }
-    })
-  }))
+  return Promise.all(promises)
 }
 
 // Helper to filter env-vars by attribute
@@ -39,27 +28,36 @@ const filterEnvVars = (envFiles, attribute) => {
   return envFiles.filter(_ => _.vars.length > 0)
 }
 
-// Helper to decrypt all env vars
-const decryptEnvVars = (envFiles, config) => {
-  return Promise.all(envFiles.map(envFile => {
-    return Promise.all(envFile.vars.map(envVar =>
-      envVar.encrypted
-        ? kms.decrypt(envVar.value, config).then(value => Object.assign({}, envVar, { value }))
-        : Promise.resolve(envVar)
-    )).then(vars =>
-      Object.assign({}, envFile, { vars })
-    )
-  }))
+// Helper to decrypt multiple environment files
+const decryptEnvFiles = (envFiles, config) => {
+  envFiles.forEach(envFile => {
 }
 
 // Returns all env-files with the env-vars
 // The optional attribute allows you to limit the returned env-vars to a single attribute
-module.exports.getEnvVars = (attribute, decrypt, config) => {
-  return readEnvYamlFiles(config.yamlPaths, config.stage).then(
+module.exports.getEnvFiles = (attribute, isLocal, decrypt, config) => {
+  return readEnvFiles(config.yamlPaths, isLocal ? config.localDotEnvPath : undefined, config.stage).then(
     envFiles => (attribute) ? filterEnvVars(envFiles, attribute) : envFiles
-  ).then(
-    envFiles => (decrypt) ? decryptEnvVars(envFiles, config) : envFiles
-  )
+  )/*.then(
+    envFiles => (decrypt) ? decryptEnvFiles(envFiles, config) : envFiles
+  )*/
+}
+
+// Returns all env-vars
+// The optional attribute allows you to limit the returned env-vars to a single attribute
+module.exports.getEnvVars = (isLocal, decrypt, config) => {
+  let localDotEnvPath = isLocal ? config.localDotEnvPath : undefined
+  return readEnvFiles(config.yamlPaths, localDotEnvPath, config.stage).then(envFiles => {
+    var envVarsDict = {}
+    envFiles.forEach(envFile => {
+      envFile.vars.forEach(envVar => {
+        envVarsDict[envVar.attribute] = envVar
+      })
+    })
+    return Object.keys(envVarsDict).map(key => envVarsDict[key])
+  }).then(envVars => {
+    return (decrypt) ? kms.encryptEnvVars(envVars, config) : envVars
+  })
 }
 
 // Sets the env variable

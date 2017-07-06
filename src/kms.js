@@ -22,8 +22,23 @@ const getKms = module.exports._getKms = (config) => {
   return kms
 }
 
+// Wrapper for kms.decrypt
+const decrypt = (encryptedText, config) => {
+  return new Promise((resolve, reject) => {
+    let blob = Buffer.from(encryptedText, 'base64')
+    getKms(config).decrypt({ CiphertextBlob: blob }, (error, data) => {
+      if (error) {
+        reject(error)
+      } else {
+        let text = data.Plaintext.toString('utf-8')
+        resolve(text)
+      }
+    })
+  })
+}
+
 // Wrapper for kms.encrypt
-module.exports.encrypt = (text, config) => {
+const encrypt = (text, config) => {
   return new Promise((resolve, reject) => {
     getKms(config).encrypt({ Plaintext: text }, (error, data) => {
       if (error) {
@@ -36,17 +51,20 @@ module.exports.encrypt = (text, config) => {
   })
 }
 
-// Wrapper for kms.decrypt
-module.exports.decrypt = (encryptedText, config) => {
-  return new Promise((resolve, reject) => {
-    let blob = Buffer.from(encryptedText, 'base64')
-    getKms(config).decrypt({ CiphertextBlob: blob }, (error, data) => {
-      if (error) {
-        reject(error)
-      } else {
-        let text = data.Plaintext.toString('utf-8')
-        resolve(text)
-      }
-    })
-  })
+// Helper to decrypt environment variables
+module.exports.decryptEnvVars = (envVars, config) => {
+  return Promise.all(envVars.map(envVar =>
+    envVar.encrypted
+      ? decrypt(envVar.value, config).then(value => Object.assign({}, envVar, { value }))
+      : Promise.resolve(envVar)
+  ))
+}
+
+// Helper to encrypt environment variables
+module.exports.encryptEnvVars = (envVars, config) => {
+  return Promise.all(envVars.map(envVar =>
+    envVar.encrypted
+      ? decrypt(envVar.value, config).then(value => Object.assign({}, envVar, { value }))
+      : Promise.resolve(envVar)
+  ))
 }

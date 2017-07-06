@@ -1,5 +1,6 @@
 'use strict'
 
+const dotenv = require('./dotenv')
 const fs = require('fs-extra')
 const path = require('path')
 const helper = require('./helper.js')
@@ -17,7 +18,8 @@ class ServerlessPlugin {
           attribute: { usage: 'Name of the attribute', shortcut: 'a' },
           value: { usage: 'Value of the attribute', shortcut: 'v' },
           encrypt: { usage: 'Denotes that a variable should be encrypted', shortcut: 'e' },
-          decrypt: { usage: 'Denotes that variables should be decrypted', shortcut: 'd' }
+          decrypt: { usage: 'Denotes that variables should be decrypted', shortcut: 'd' },
+          local: { usage: 'Denotes that .local.env should be included', shortcut: 'l' }
         }
       },
       'env-generate': {
@@ -45,9 +47,9 @@ class ServerlessPlugin {
     } else if (this.options.value) {
       return Promise.reject(new Error('Setting a value requires --attribute'))
     } else {
-      return helper.getEnvVars(this.options.attribute, !!this.options.decrypt, config).then(envFiles => {
+      return helper.getEnvFiles(this.options.attribute, !!this.options.local, !!this.options.decrypt, config).then(envFiles => {
         envFiles.forEach(envFile => {
-          this.serverless.cli.log(`${envFile.file}:`)
+          this.serverless.cli.log(`${path.basename(envFile.path)}:`)
           envFile.vars.forEach(envVar => {
             let valueText = envVar.encrypted ? (this.options.decrypt ? `${envVar.value} (encrypted)` : '******') : envVar.value
             this.serverless.cli.log(`  ${envVar.attribute}: ${valueText}`)
@@ -60,14 +62,8 @@ class ServerlessPlugin {
   writeDotEnvFile () {
     let config = this.getConfig()
     this.serverless.cli.log('Creating .env file...')
-    return helper.getEnvVars(undefined, true, config).then(envFiles => {
-      var lines = []
-      envFiles.forEach(envFile => {
-        envFile.vars.forEach(envVar => {
-          lines.push(`${envVar.attribute}=${envVar.value}`)
-        })
-      })
-      return fs.writeFile(config.dotEnvPath, lines.join('\n'))
+    return helper.getEnvVars(!!this.options.local, true, config).then(envVars => {
+      dotenv.write(config.dotEnvPath, envVars)
     })
   }
 
@@ -87,11 +83,12 @@ class ServerlessPlugin {
         region: this.serverless.processedInput.options.region || this.serverless.service.provider.region,
         profile: this.serverless.processedInput.options.profile || this.serverless.service.provider.profile,
         stage: stage,
-        yamlPaths: this.serverless.service.custom.envFiles.map(envFile =>
+        yamlPaths: (this.serverless.service.custom.envFiles || []).map(envFile =>
           path.join(servicePath, envFile)
         ),
         dotEnvPath: path.join(servicePath, '.env'),
-        kmsKeyId: keyId[stage] || keyId
+        localDotEnvPath: path.join(servicePath, '.local.env'),
+        kmsKeyId: keyId ? (keyId[stage] || keyId) : undefined
       }
     }
     return this.config
